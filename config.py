@@ -11,7 +11,8 @@ K_RETRIEVE_DEFAULT = 6
 MODEL_NAME = "deepseek-chat"
 MODEL_BASE_URL = "https://api.deepseek.com/v1"
 API_ENV_KEY = "DEEPSEEK_API_KEY"
-os.environ["DEEPSEEK_API_KEY"] = "sk-3ef1cbfbf45848599efaf2942d726205"
+
 
 # 渲染配置
+
 PDF_RENDER_DPI = 150
