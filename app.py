@@ -17,7 +17,7 @@ from llm import get_llm, rag_answer, gen_mcq, gen_card_or_map
 from ui_components import render_evidence_cards, render_mcq_block
 
 
-st.set_page_config(page_title="📘 学习助手（模块化）", page_icon="📘", layout="wide")
+st.set_page_config(page_title="RAG学习助手", page_icon="📘", layout="wide")
 
 
 # --- 全局状态 ---
