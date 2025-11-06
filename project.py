@@ -29,7 +29,7 @@ class Project:
         self.meta_path.write_text(json.dumps(self.meta, ensure_ascii=False, indent=2), encoding="utf-8")
     
     
-    # --- 鑱婂ぉ ---
+    # --- 閼卞﹤銇� ---
     def append_chat(self, record: Dict[str, Any]):
         with open(self.chat_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -48,7 +48,7 @@ class Project:
         return out[-limit:]
     
     
-    # --- 閿欓鏈� ---
+    # --- 闁挎瑩顣介張锟� ---
     def log_wrong(self, record: Dict[str, Any]):
         with open(self.wrong_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -96,7 +96,7 @@ class Project:
         self.meta_path.write_text(json.dumps(self.meta, ensure_ascii=False, indent=2), encoding="utf-8")
     
     
-    # --- 鑱婂ぉ ---
+    # --- 閼卞﹤銇� ---
     def append_chat(self, record: Dict[str, Any]):
         with open(self.chat_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -115,7 +115,7 @@ class Project:
         return out[-limit:]
     
     
-    # --- 閿欓鏈� ---
+    # --- 闁挎瑩顣介張锟� ---
     def log_wrong(self, record: Dict[str, Any]):
         with open(self.wrong_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
