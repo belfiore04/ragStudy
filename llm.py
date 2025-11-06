@@ -29,7 +29,7 @@ def rag_answer(llm: ChatOpenAI, vs, q: str, k: int, devlog: Dict[str, Any]) -> T
     prompt = (
     "You are a study assistant. Answer strictly based on [CONTEXT]. "
     "If evidence is insufficient, say 'Insufficient evidence'. "
-    "Use bullet points. End with '参考: <file:P/S,...>'.\n"
+    "Use bullet points. \n"
     "回答的非格式部分请用中文。"
     f"Question: {q}\n\n[CONTEXT]\n{ctx}"
     )

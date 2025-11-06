@@ -1,0 +1,8 @@
+# 运行时数据，不进 Git
+projects/
+index_app/
+*.faiss
+*.pkl
+*.jsonl
+__pycache__/
+.devcontainer/
