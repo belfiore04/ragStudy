@@ -88,7 +88,7 @@ view = st.session_state["view"]
 # 视图一：新建项目（默认页）
 # =================================================
 if view == "新建项目":
-    st.title("📘 学习助手 · 项目选择 / 新建")
+    st.title("RAG学习助手")
 
     cols = st.columns([2, 1])
 
@@ -121,13 +121,13 @@ if view == "新建项目":
     with cols[1]:
         st.subheader("创建新项目")
         new_name = st.text_input("项目名称", placeholder="请输入项目名称")
-    
+
         up_files = st.file_uploader(
             "上传 PDF / PPTX / DOCX / TXT",
             type=["pdf", "pptx", "docx", "txt"],
             accept_multiple_files=True
         )
-    
+
         if st.button("创建并构建索引", type="primary"):
             display_name = new_name.strip()
             if not display_name:
@@ -144,11 +144,11 @@ if view == "新建项目":
                 else:
                     proj.root.mkdir(parents=True, exist_ok=True)
                     proj.files_dir.mkdir(parents=True, exist_ok=True)
-    
+
                     docs_all = []
                     files_meta = []
                     progress = st.progress(0, text="保存文件…")
-    
+
                     # 1) 保存 + 解析
                     for idx, f in enumerate(up_files, start=1):
                         b = f.read()
@@ -167,18 +167,18 @@ if view == "新建项目":
                             docs_all += read_docx(b, f.name)
                         elif ext == "txt":
                             docs_all += read_txt(b, f.name)
-    
+
                     # 2) 切分
                     progress.progress(30, text="分块中…")
                     chunks = split_docs(docs_all)
-    
+
                     # 3) 嵌入与索引
                     progress.progress(45, text="计算向量…")
                     _ = get_embeddings()
                     progress.progress(60, text="建立索引…")
                     from langchain_community.vectorstores import FAISS
                     vs = FAISS.from_documents(chunks, _)
-    
+
                     # 4) 保存
                     save_index(vs, proj.index_dir)
                     progress.progress(85, text="写入元数据…")
