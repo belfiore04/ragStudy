@@ -236,6 +236,7 @@ def render_chat_view(INDEX_ROOT: Path):
                         user_msg=user_msg,
                         topic=topic,
                         devlog=devlog,
+                        history=chats
                     )
 
                 # 写入 assistant 侧聊天记录

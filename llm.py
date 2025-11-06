@@ -23,21 +23,33 @@ def get_llm():
         max_retries=2,
     )
 
-def rag_answer(llm: ChatOpenAI, vs, q: str, k: int, devlog: Dict[str, Any]) -> Tuple[str, List[Document]]:
-    hits = retrieve(vs, q, k)
+def rag_answer(
+        llm: ChatOpenAI,
+        vs, 
+        q: str, 
+        k: int, 
+        devlog: Dict[str, Any],
+        history: List[Dict[str, Any]] | None = None,
+) -> Tuple[str, List[Document]]:
+    # 1) 先按需改写检索 query（可能等于原 q）
+    rewritten_q = _rewrite_query_if_needed(llm, q, history, devlog)
+    hits = retrieve(vs, rewritten_q, k)
     ctx = format_hits(hits)
     prompt = (
-    "You are a study assistant. Answer strictly based on [CONTEXT]. "
-    "If evidence is insufficient, say 'Insufficient evidence'. "
-    "Use bullet points. \n"
-    "回答的非格式部分请用中文。"
-    f"Question: {q}\n\n[CONTEXT]\n{ctx}"
+        "你是一个仿老师的学习助手。你需要严格依照 [CONTEXT]来回答问题。 "
+        "如果依据不足，请你诚实回答'依据不足'。\n"
+        "回答要求：\n"
+        "1) 用中文回答；\n"
+        "2) 先用简短的自然语言解释核心概念或结论；\n"
+        "3) 然后用要点式（bullet points）分条展开说明：关键理由、步骤、注意点；\n"
+        "4) 如果适合，可以顺带给出一个简单的小例子帮助理解。\n\n"
+        f"Question: {q}\n\n[CONTEXT]\n{ctx}"
     )
+
     devlog["prompt"] = prompt
     out = llm.invoke(prompt)
     devlog["raw"] = getattr(out, "content", str(out))
     return out.content, hits
-
 
 def gen_mcq(llm: ChatOpenAI, context: str, devlog: Dict[str, Any]) -> Dict[str, Any]:
     prompt = (
@@ -57,9 +69,6 @@ def gen_mcq(llm: ChatOpenAI, context: str, devlog: Dict[str, Any]) -> Dict[str, 
         data = json.loads(m.group(0)) if m else {"question": "Parse failed", "options": [], "answer": "", "rationale": text}
     return data
 
-
-
-
 def gen_card_or_map(llm: ChatOpenAI, context: str, mode: str, devlog: Dict[str, Any]) -> str:
     if mode == "card":
         instr = (
@@ -73,3 +82,64 @@ def gen_card_or_map(llm: ChatOpenAI, context: str, mode: str, devlog: Dict[str, 
     out = llm.invoke(prompt).content
     devlog["raw_cardmap"] = out
     return out
+
+def _build_last_turn(history: List[Dict[str, Any]] | None) -> str:
+    """
+    只取最近一轮 user + assistant，对话摘要给改写用。
+    """
+    if not history:
+        return ""
+
+    # 从后往前找最近的 user / assistant 文本
+    user_text = ""
+    asst_text = ""
+    for rec in reversed(history):
+        role = rec.get("role")
+        text = rec.get("text", "")
+        if not text:
+            continue
+        if role == "assistant" and not asst_text:
+            asst_text = text
+        elif role == "user" and not user_text:
+            user_text = text
+        if user_text and asst_text:
+            break
+
+    if not user_text and not asst_text:
+        return ""
+
+    lines = []
+    if user_text:
+        lines.append(f"User: {user_text}")
+    if asst_text:
+        lines.append(f"Assistant: {asst_text}")
+    return "\n".join(lines)
+
+def _rewrite_query_if_needed(
+    llm,
+    q: str,
+    history: List[Dict[str, Any]] | None,
+    devlog: Dict[str, Any],
+) -> str:
+    """
+    只有在存在指代 / 不清晰时才改写；否则原样返回 q。
+    """
+    last_turn = _build_last_turn(history)
+    if not last_turn:
+        return q
+
+    prompt = (
+        "你是一个“查询改写”助手。\n"
+        "用户当前的问题里如果出现“这个东西”“它”“这类方法”等指代，"
+        "请结合最近一轮对话，把问题改写成一个自包含、完整、具体的中文问题。\n"
+        "如果当前问题本身已经足够清晰，不需要依赖上下文就能理解，"
+        "那就原样输出当前问题，不要改写。\n"
+        "只输出最终的问题文本，不要添加任何解释或前后缀。\n\n"
+        f"[最近一轮对话]\n{last_turn}\n\n"
+        f"[当前问题]\n{q}"
+    )
+
+    out = llm.invoke(prompt).content.strip()
+    devlog["q_rewritten"] = out
+    # 防止 LLM 弄丢信息：返回空就退回 q
+    return out or q

@@ -1,7 +1,7 @@
 # tools.py
 import re
 import time
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Tuple, Optional
 import streamlit as st
 from langchain.schema import Document
 from rag_core import retrieve
@@ -18,6 +18,7 @@ def run_tool(
     user_msg: str,
     topic: str,
     devlog: Dict[str, Any],
+    history: Optional[List[Dict[str, Any]]] = None,  # 新增
 ) -> List[Dict[str, Any]]:
     """
     执行对应“工具”，负责：
@@ -75,10 +76,12 @@ def run_tool(
     # 默认：普通 RAG 问答
     try:
         with st.spinner("生成回答中…"):
+            q = topic or user_msg
             ans, hits_r = rag_answer(
-                llm, vs, user_msg,
+                llm, vs, q,
                 k=4,   # 这里你也可以用 K_RETRIEVE_DEFAULT，在调用方传进来
                 devlog=devlog,
+                history=history
             )
         st.markdown(ans)
         render_evidence_cards(proj, hits_r)
@@ -181,24 +184,31 @@ def llm_make_plan(llm, user_msg: str, devlog: Dict[str, Any]) -> Dict[str, Any]:
     text = user_msg.strip()
 
     system_prompt = (
-        "你是一个学习计划规划器，负责为用户设计一小段学习 session。\n"
-        "可用的工具有：\n"
-        "- answer: 普通 RAG 问答，解释概念、推导、总结等。\n"
-        "- quiz: 生成 1 道单选题，用于练习或自测。\n"
-        "- card: 生成“知识卡片”，提炼核心概念与要点。\n"
-        "- map: 生成“思维导图”，梳理知识结构。\n\n"
-        "你要根据用户需求，生成 1～3 个步骤的学习计划，步骤按顺序执行。\n"
-        "常见模式例如：\n"
-        "- 先 quiz 几道题再用 answer 讲解\n"
-        "- 或者 quiz 多道题 + card 总结 + map 梳理\n\n"
-        "请严格输出 JSON，格式为：\n"
-        '{\"steps\": [\n'
-        '  {\"tool\": \"quiz|answer|card|map\", \"topic\": \"主题\", \"n_questions\": 可选整数},\n'
-        '  ... 最多 3 步\n'
-        ']}\n'
-        "注意：不要输出任何多余文字，不要加注释。"
-    )
-
+     "你是一个学习计划规划器，负责为用户设计一小段“像老师上课一样”的学习 session。\n"
+     "你不会直接讲解知识本身，只负责规划后续要调用的工具。\n"
+     "可用的工具有：\n"
+     "- answer: 普通 RAG 问答，用来讲解概念、例题讲解、总结要点，相当于老师“讲一段”。\n"
+     "- quiz: 生成 1 道单选题，用来练习或自测，相当于老师“出一道题让学生做一下”。\n"
+     "- card: 生成“知识卡片”，提炼核心概念与要点，相当于老师“最后帮学生整理一个小抄”。\n"
+     "- map: 生成“思维导图”，梳理知识结构，相当于老师“帮学生画一个知识结构图”。\n\n"
+     "你的任务是：根据用户的需求，规划 1～6 个步骤的学习流程，每一步调用一个工具。\n"
+     "流程要尽量像老师带着学生走一小节课，比如：\n"
+     "- 先用 answer 简要讲解，然后用 quiz 出 1～2 道题检查理解；\n"
+     "- 或者先 quiz 出题让学生暴露问题，再用 answer 讲解，再用 card 帮学生整理要点；\n"
+     "- 或者 answer 讲解 + map 梳理结构；\n"
+     "- 如果用户只问了一个很小的问题，也可以只给 1 步（例如只用 answer）。\n\n"
+     "关于字段含义：\n"
+     "- tool: 只能是 \"answer\" | \"quiz\" | \"card\" | \"map\"。\n"
+     "- topic: 用于检索的主题，一般来自用户的问题，也可以稍作抽象，例如“导数基础”“自底向上优先分析的优点”等。\n"
+     "- n_questions: 仅在 tool=quiz 时生效，表示这一阶段要出多少道题，默认 1，通常建议 1～3 道，不要超过 10。\n\n"
+     "请根据用户需求，设计最多 6 步，步骤按顺序执行，体现一定的教学节奏（讲解→练习→总结 或 练习→讲解→整理 等）。\n"
+     "严格输出 JSON，格式为：\n"
+     "{\\\"steps\\\": [\n"
+     "  {\\\"tool\\\": \\\"quiz|answer|card|map\\\", \\\"topic\\\": \\\"主题\\\", \\\"n_questions\\\": 可选整数},\n"
+     "  ... 最多 3 步\n"
+     "]}\n"
+     "注意：不要输出任何多余文字，不要加注释。"
+)
     user_prompt = f"用户输入是：{text}\n请给出一个合适的学习 plan。"
 
     out = llm.invoke(system_prompt + "\n\n" + user_prompt)
@@ -213,7 +223,7 @@ def llm_make_plan(llm, user_msg: str, devlog: Dict[str, Any]) -> Dict[str, Any]:
             raise ValueError("no valid steps")
         # 规范化每个 step
         norm_steps = []
-        for s in steps[:3]:  # 最多 3 步
+        for s in steps[:6]:  # 最多 3 步
             tool = str(s.get("tool", "answer")).strip().lower()
             if tool not in ("answer", "quiz", "card", "map"):
                 tool = "answer"
