@@ -306,3 +306,47 @@ def execute_plan(
             records_all.extend(step_records)
 
     return records_all
+
+def llm_should_use_plan(llm, user_msg: str, devlog: Dict[str, Any]) -> bool:
+    """
+    让 LLM 决定当前这条消息是否需要使用多工具 plan。
+
+    典型需要 plan 的情况：
+    - 用户明确说“系统复习”“综合训练”“出一套题”“完整复习”之类；
+    - 问题本身比较大、涉及多个知识点，需要“先练题再总结/梳理结构”。
+
+    返回 True 用 plan，False 就用单工具路由。
+    """
+    text = user_msg.strip()
+
+    system_prompt = (
+        "你是学习助手的调度器，要判断是否需要一个多步骤的学习计划(plan)。\n"
+        "可选策略：\n"
+        "- False: 单一步骤，用一个工具(answer/quiz/card/map)就可以解决。\n"
+        "- True: 使用多步骤 plan，比如“先出几道题，再总结/画思维导图”等。\n\n"
+        "当用户有这些倾向时倾向于 True：\n"
+        "- 说“系统复习、综合训练、出一套题、完整复习、来一套练习”等。\n"
+        "- 问题明显很大，像“帮我全面掌握第 X 章”“从头梳理这个专题”等。\n"
+        "当只是单个问题、单个概念、一个小练习时，选择 False。\n\n"
+        "你必须只输出 JSON：{\"use_plan\": true 或 false}\n"
+        "不要输出任何其他文字。"
+    )
+
+    user_prompt = f"用户输入是：{text}\n请判断是否需要 plan。"
+
+    out = llm.invoke(system_prompt + "\n\n" + user_prompt)
+    raw = getattr(out, "content", str(out)).strip()
+    devlog["plan_decide_raw"] = raw
+
+    import json
+    try:
+        data = json.loads(raw)
+        val = data.get("use_plan", False)
+        # 兼容 'true'/'false' 字符串
+        if isinstance(val, str):
+            val = val.strip().lower() == "true"
+        return bool(val)
+    except Exception as e:
+        devlog["plan_decide_error"] = f"{type(e).__name__}: {e}"
+        # 兜底：默认不用 plan
+        return False

@@ -15,7 +15,28 @@ from llm import get_llm
 from ui_components import render_evidence_cards, render_mcq_block
 from utils import slugify_name
 from llm import get_llm
-from tools import execute_plan, llm_make_plan, run_tool, llm_route_tool
+from tools import execute_plan, llm_make_plan, run_tool, llm_route_tool, llm_should_use_plan
+
+def render_assistant_record_body(proj, rec, idx):
+    kind = rec.get("kind", "msg")
+    if kind == "answer":
+        st.markdown(rec.get("text", ""))
+        if rec.get("hits"):
+            from langchain.schema import Document
+            render_evidence_cards(
+                proj,
+                [Document(page_content=h["content"], metadata=h["meta"]) for h in rec["hits"]]
+            )
+    elif kind == "mcq":
+        render_mcq_block(
+            proj,
+            rec.get("data", {}),
+            qid=str(rec.get("qid") or rec.get("t") or f"mcq_{idx}")
+        )
+    elif kind in ("card", "mindmap"):
+        st.markdown(rec.get("text", ""))
+    # 其他 kind 暂时忽略或按需要加
+
 
 def render_new_project_view(projects: List[Project], INDEX_ROOT: Path):
     st.title("RAG学习助手")
@@ -149,26 +170,24 @@ def render_chat_view(INDEX_ROOT: Path):
         for i, rec in enumerate(chats):
             role = rec.get("role", "user")
             kind = rec.get("kind", "msg")
-            with st.chat_message("assistant" if role == "assistant" else "user"):
-                if kind == "msg":
-                    st.markdown(rec.get("text", ""))
-                elif kind == "answer":
-                    st.markdown(rec.get("text", ""))
-                    if rec.get("hits"):
-                        from langchain.schema import Document
-                        render_evidence_cards(
-                            proj,
-                            [Document(page_content=h["content"], metadata=h["meta"]) for h in rec["hits"]]
-                        )
-                elif kind == "mcq":
-                    render_mcq_block(
-                        proj,
-                        rec.get("data", {}),
-                        qid=str(rec.get("qid") or rec.get("t") or f"mcq_{i}")
-                    )
-                elif kind in ("card", "mindmap"):
-                    st.markdown(rec.get("text", ""))
 
+            if role == "user":
+                with st.chat_message("user"):
+                    if kind == "msg":
+                        st.markdown(rec.get("text", ""))
+                    else:
+                        st.markdown(rec.get("text", ""))
+                continue
+            
+            # assistant
+            with st.chat_message("assistant"):
+                if kind == "multi":
+                    # 多工具合并成一次回答
+                    items = rec.get("items", []) or []
+                    for j, sub in enumerate(items):
+                        render_assistant_record_body(proj, sub, f"{i}_{j}")
+                else:
+                    render_assistant_record_body(proj, rec, i)
         # 输入区
         user_msg = st.chat_input("输入问题、或 /quiz 关键词，/card 主题，/map 主题")
         if user_msg:
@@ -184,22 +203,13 @@ def render_chat_view(INDEX_ROOT: Path):
 
             llm = get_llm()
             devlog = {}
-            text = user_msg.strip()
-            use_plan = any(k in text for k in [
-                "/plan",
-                "综合训练",
-                "系统复习",
-                "综合复习",
-                "一套练习",
-                "出一套题",
-                "完整复习",
-            ])
+            use_plan = llm_should_use_plan(llm, user_msg, devlog)
             with st.chat_message("assistant"):
                 if use_plan:
                     # 1) 先让 LLM 生成学习 plan
                     plan = llm_make_plan(llm, user_msg, devlog)
                     # 2) 再按 plan 执行多个工具
-                    records = execute_plan(
+                    step_records = execute_plan(
                         plan=plan,
                         proj=proj,
                         vs=vs,
@@ -207,6 +217,14 @@ def render_chat_view(INDEX_ROOT: Path):
                         user_msg=user_msg,
                         devlog=devlog,
                     )
+                    multi_rec = {
+                        "t": now_ts(),
+                        "role": "assistant",
+                        "kind": "multi",
+                        "items": step_records,   # 保留每个工具的结构
+                    }
+                    # 等会儿统一 append
+                    records = [multi_rec]
                 else:
                     mode, topic = llm_route_tool(llm, user_msg)
 
@@ -219,16 +237,15 @@ def render_chat_view(INDEX_ROOT: Path):
                         topic=topic,
                         devlog=devlog,
                     )
-    
-                    # 写入 assistant 侧聊天记录
-                    for rec in records:
-                        proj.append_chat(rec)
-    
-                    if st.session_state.get("dev_mode"):
-                        with st.expander("🔧 开发者模式：Prompt & 原始返回"):
-                            for k, v in devlog.items():
-                                st.markdown(f"**{k}**")
-                                st.code(v)
+
+                # 写入 assistant 侧聊天记录
+                for rec in records:
+                    proj.append_chat(rec)
+                if st.session_state.get("dev_mode"):
+                    with st.expander("🔧 开发者模式：Prompt & 原始返回"):
+                        for k, v in devlog.items():
+                            st.markdown(f"**{k}**")
+                            st.code(v)
 
 
 def render_wrongbook_view(INDEX_ROOT: Path):
