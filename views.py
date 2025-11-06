@@ -15,7 +15,7 @@ from llm import get_llm
 from ui_components import render_evidence_cards, render_mcq_block
 from utils import slugify_name
 from llm import get_llm
-from tools import detect_tool, run_tool, llm_route_tool
+from tools import execute_plan, llm_make_plan, run_tool, llm_route_tool
 
 def render_new_project_view(projects: List[Project], INDEX_ROOT: Path):
     st.title("RAG学习助手")
@@ -184,35 +184,51 @@ def render_chat_view(INDEX_ROOT: Path):
 
             llm = get_llm()
             devlog = {}
-            rule_mode, rule_topic = detect_tool(user_msg)
-
-            if rule_mode != "answer":
-                # 说明用户用了 /quiz /card /map 或中文指令，尊重用户显式选择
-                mode, topic = rule_mode, rule_topic
-            else:
-                # 2) 没有显式工具指令，交给 LLM 决策
-                mode, topic = llm_route_tool(llm, user_msg)
-
+            text = user_msg.strip()
+            use_plan = any(k in text for k in [
+                "/plan",
+                "综合训练",
+                "系统复习",
+                "综合复习",
+                "一套练习",
+                "出一套题",
+                "完整复习",
+            ])
             with st.chat_message("assistant"):
-                records = run_tool(
-                    mode=mode,
-                    proj=proj,
-                    vs=vs,
-                    llm=llm,
-                    user_msg=user_msg,
-                    topic=topic,
-                    devlog=devlog,
-                )
+                if use_plan:
+                    # 1) 先让 LLM 生成学习 plan
+                    plan = llm_make_plan(llm, user_msg, devlog)
+                    # 2) 再按 plan 执行多个工具
+                    records = execute_plan(
+                        plan=plan,
+                        proj=proj,
+                        vs=vs,
+                        llm=llm,
+                        user_msg=user_msg,
+                        devlog=devlog,
+                    )
+                else:
+                    mode, topic = llm_route_tool(llm, user_msg)
 
-                # 写入 assistant 侧聊天记录
-                for rec in records:
-                    proj.append_chat(rec)
-
-                if st.session_state.get("dev_mode"):
-                    with st.expander("🔧 开发者模式：Prompt & 原始返回"):
-                        for k, v in devlog.items():
-                            st.markdown(f"**{k}**")
-                            st.code(v)
+                    records = run_tool(
+                        mode=mode,
+                        proj=proj,
+                        vs=vs,
+                        llm=llm,
+                        user_msg=user_msg,
+                        topic=topic,
+                        devlog=devlog,
+                    )
+    
+                    # 写入 assistant 侧聊天记录
+                    for rec in records:
+                        proj.append_chat(rec)
+    
+                    if st.session_state.get("dev_mode"):
+                        with st.expander("🔧 开发者模式：Prompt & 原始返回"):
+                            for k, v in devlog.items():
+                                st.markdown(f"**{k}**")
+                                st.code(v)
 
 
 def render_wrongbook_view(INDEX_ROOT: Path):
