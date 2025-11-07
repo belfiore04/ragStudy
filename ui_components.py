@@ -1,10 +1,12 @@
+import html
 import time
 import streamlit as st
 from pathlib import Path
 from typing import List, Dict, Any
 from langchain.schema import Document
 from io_readers import convert_to_pdf_with_libreoffice, pdf_page_to_image
-
+from streamlit_markmap import markmap
+import streamlit.components.v1 as components
 
 def _render_block_container(kind: str, title: str | None = None):
     """
@@ -144,7 +146,70 @@ def render_mindmap_block(text: str):
     思维导图：同样用卡片容器包裹，内部仍用 Markdown 解析层级列表。
     """
     with _render_block_container("mindmap", None):
-        st.markdown(text or "", unsafe_allow_html=False)
+        """
+    自己用 markmap-autoloader 渲染思维导图，
+    这样 iframe 里的 CSS 完全由我们控制，可以改字体颜色 / 分支颜色。
+    """
+        if not text:
+            return
+
+        escaped_md = html.escape(text)
+
+        html_code = f"""
+        <!DOCTYPE html>
+        <html class="markmap-dark">
+        <head>
+          <meta charset="utf-8" />
+          <style>
+            html, body {{
+              margin: 0;
+              padding: 0;
+              width: 100%;
+              height: 100%;
+              background: transparent;
+            }}
+
+            .markmap {{
+              position: relative;
+              width: 100%;
+              height: 100%;
+              /* 这里可以继续覆盖变量 */
+              --markmap-text-color: #eeeeee;
+              --markmap-link-color: #88c0d0;
+              --markmap-code-bg: #2e3440;
+              --markmap-code-color: #d8dee9;
+              font: 300 16px/20px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+              color: var(--markmap-text-color);
+            }}
+
+            .markmap > svg {{
+              width: 100%;
+              height: 100%;
+            }}
+          </style>
+        </head>
+        <body>
+          <div class="markmap">
+            <script type="text/template">
+        {escaped_md}
+            </script>
+          </div>
+
+          <script>
+            window.markmap = {{
+              autoLoader: {{
+                toolbar: true
+              }},
+            }};
+          </script>
+          <script src="https://cdn.jsdelivr.net/npm/markmap-autoloader@0.18.12"></script>
+        </body>
+        </html>
+        """
+
+
+        # 这里决定 iframe 本身有多高，相当于“可视高度”
+        components.html(html_code, height=500, scrolling=True)
 
 def render_answer_with_evidence(
     proj,
