@@ -12,30 +12,40 @@ from utils import now_ts, due_wrong
 from io_readers import read_pdf, read_pptx, read_docx, read_txt
 from rag_core import get_embeddings, split_docs, save_index, try_load_index, retrieve
 from llm import get_llm
-from ui_components import render_evidence_cards, render_mcq_block
 from utils import slugify_name
 from llm import get_llm
 from tools import execute_plan, llm_make_plan, run_tool, llm_route_tool, llm_should_use_plan
-
+from ui_components import (
+    render_evidence_cards,
+    render_mcq_block,
+    render_card_block,
+    render_mindmap_block,
+    render_answer_with_evidence,
+)
 def render_assistant_record_body(proj, rec, idx):
     kind = rec.get("kind", "msg")
+
     if kind == "answer":
-        st.markdown(rec.get("text", ""))
-        if rec.get("hits"):
-            from langchain.schema import Document
-            render_evidence_cards(
-                proj,
-                [Document(page_content=h["content"], metadata=h["meta"]) for h in rec["hits"]]
-            )
+        from langchain.schema import Document
+        hits = rec.get("hits") or []
+        docs = [
+            Document(page_content=h["content"], metadata=h["meta"])
+            for h in hits
+        ]
+        render_answer_with_evidence(proj, rec.get("text", ""), docs)
+
     elif kind == "mcq":
         render_mcq_block(
             proj,
             rec.get("data", {}),
-            qid=str(rec.get("qid") or rec.get("t") or f"mcq_{idx}")
+            qid=str(rec.get("qid") or rec.get("t") or f"mcq_{idx}"),
         )
-    elif kind in ("card", "mindmap"):
-        st.markdown(rec.get("text", ""))
-    # 其他 kind 暂时忽略或按需要加
+
+    elif kind == "card":
+        render_card_block(rec.get("text", ""))
+
+    elif kind == "mindmap":
+        render_mindmap_block(rec.get("text", ""))
 
 
 def render_new_project_view(projects: List[Project], INDEX_ROOT: Path):

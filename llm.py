@@ -218,10 +218,19 @@ def gen_card_or_map(
     if instruction:
         inst_part = f"\n[TEACHER_INSTRUCTION]\n{instruction[:400]}"
 
+    no_codeblock_hint = (
+        "重要要求：\n"
+        "- 不要在生成的中间使用代码块语法 ``` ，也不要输出任何 ```。\n"
+        "- 如果要展示文法产生式、公式等，请用普通行或列表的形式书写，例如：\n"
+        "  - S→bAb\n"
+        "  - A→(B | a\n"
+        "而不是放在 ``` 包裹的代码块中。\n"
+    )
     prompt = (
         f"{instr}\n"
         f"{role_hint}\n"
         f"{strict_hint}\n"
+        f"{no_codeblock_hint}\n"
         "输出用中文。\n\n"
         f"{inst_part}\n\n"
         f"[MATERIAL]\n{context[:4000]}"

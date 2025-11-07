@@ -6,102 +6,15 @@ import streamlit as st
 from langchain.schema import Document
 from rag_core import retrieve
 from llm import rag_answer, gen_mcq, gen_card_or_map
-from ui_components import render_evidence_cards, render_mcq_block
 from utils import now_ts
 import json
-
-# def run_tool(
-#     mode: str,
-#     proj,
-#     vs,
-#     llm,
-#     user_msg: str,
-#     topic: str,
-#     devlog: Dict[str, Any],
-#     history: Optional[List[Dict[str, Any]]] = None,  # 新增
-# ) -> List[Dict[str, Any]]:
-#     """
-#     执行对应“工具”，负责：
-#     - 检索 / 调 LLM
-#     - 在当前的 st.chat_message("assistant") 容器内渲染 UI
-#     - 返回需要写入 chat.jsonl 的记录列表
-#     """
-#     records: List[Dict[str, Any]] = []
-
-#     if mode == "quiz":
-#         hits_r = retrieve(vs, topic, k=8)
-#         ctx = "\n\n".join(d.page_content[:600] for d in hits_r)
-#         try:
-#             with st.spinner("生成题目中…"):
-#                 data = gen_mcq(llm, ctx, devlog)
-#         except Exception as e:
-#             devlog["error_mcq"] = str(e)
-#             st.error(f"生成题目失败：{e}")
-#             data = {
-#                 "question": "生成失败",
-#                 "options": [],
-#                 "answer": "",
-#                 "rationale": "",
-#             }
-#         qid = str(int(time.time() * 1000))
-#         render_mcq_block(proj, data, qid)
-#         records.append({
-#             "t": now_ts(),
-#             "role": "assistant",
-#             "kind": "mcq",
-#             "qid": qid,
-#             "data": data,
-#         })
-#         return records
-
-#     if mode in ("card", "map"):
-#         hits_r = retrieve(vs, topic, k=10)
-#         ctx = "\n\n".join(d.page_content[:800] for d in hits_r)
-#         mode_cardmap = "card" if mode == "card" else "mindmap"
-#         try:
-#             with st.spinner("生成内容中…"):
-#                 out = gen_card_or_map(llm, ctx, mode_cardmap, devlog)
-#             st.markdown(out)
-#             records.append({
-#                 "t": now_ts(),
-#                 "role": "assistant",
-#                 "kind": mode_cardmap,
-#                 "text": out,
-#             })
-#         except Exception as e:
-#             devlog["error_cardmap"] = str(e)
-#             st.error(f"生成内容失败：{e}")
-#         return records
-
-#     # 默认：普通 RAG 问答
-#     try:
-#         with st.spinner("生成回答中…"):
-#             q = topic or user_msg
-#             ans, hits_r = rag_answer(
-#                 llm, vs, q,
-#                 k=4,   # 这里你也可以用 K_RETRIEVE_DEFAULT，在调用方传进来
-#                 devlog=devlog,
-#                 history=history
-#             )
-#         st.markdown(ans)
-#         render_evidence_cards(proj, hits_r)
-#         records.append({
-#             "t": now_ts(),
-#             "role": "assistant",
-#             "kind": "answer",
-#             "text": ans,
-#             "hits": [
-#                 {"content": h.page_content, "meta": h.metadata}
-#                 for h in hits_r
-#             ],
-#         })
-#     except Exception as e:
-#         devlog["error_answer"] = str(e)
-#         st.error(f"生成回答失败：{e}")
-
-#     return records
-
-
+from ui_components import (
+    render_evidence_cards,
+    render_mcq_block,
+    render_card_block,
+    render_mindmap_block,
+    render_answer_with_evidence,
+)
 def run_tool(
     mode: str,
     proj,
@@ -174,7 +87,11 @@ def run_tool(
                     extra_context=extra_context,
                     instruction = instruction
                 )
-            st.markdown(out)
+            if mode_cardmap == "card":
+                render_card_block(out)
+            else:
+                render_mindmap_block(out)
+
             records.append({
                 "t": now_ts(),
                 "role": "assistant",
@@ -200,8 +117,8 @@ def run_tool(
                 extra_context=extra_context,
                 instruction = instruction
             )
-        st.markdown(ans)
-        render_evidence_cards(proj, hits_r)
+        docs = [Document(page_content=h.page_content, metadata=h.metadata) for h in hits_r]
+        render_answer_with_evidence(proj, ans, docs)
         records.append({
             "t": now_ts(),
             "role": "assistant",
