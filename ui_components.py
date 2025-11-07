@@ -38,35 +38,6 @@ def _render_block_container(kind: str, title: str | None = None):
     return container
 
 
-# def render_evidence_cards(proj, hits: List[Document]):
-#     if not hits:
-#         return
-#     # 依据整体外面一个卡片
-#     with _render_block_container("evidence", "依据"):
-#         for d in hits:
-#             meta = d.metadata or {}
-#             src = meta.get("source", "?")
-#             tag = Path(src).name
-#             page = meta.get("page")
-#             slide = meta.get("slide")
-#             label = f"{tag} · " + (f"P{page}" if page else (f"S{slide}" if slide else ""))
-#             with st.expander(label):
-#                 src_path = proj.files_dir / tag
-#                 shown = False
-#                 if src_path.exists():
-#                     preview_pdf = src_path if src_path.suffix.lower() == ".pdf" else convert_to_pdf_with_libreoffice(
-#                         src_path, proj.preview_dir / "pdf"
-#                     )
-#                     page_num = page or slide
-#                     if preview_pdf and page_num:
-#                         img = pdf_page_to_image(preview_pdf, page_num)
-#                         if img is not None:
-#                             st.image(img, use_column_width=True)
-#                             shown = True
-#                 if not shown:
-#                     txt = d.page_content or ""
-#                     st.write(txt[:1000] + ("..." if len(txt) > 1000 else ""))
-
 def render_evidence_cards(proj, hits: List[Document]):
     """
     在一个小 expander 里展示依据列表。

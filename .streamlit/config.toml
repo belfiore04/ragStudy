@@ -1,0 +1,10 @@
+[theme]
+base = "dark"  # 用官方暗色主题打底
+
+# 整个 app 背景
+backgroundColor = "#212121"
+primaryColor = "#5f389a"
+
+[theme.sidebar]
+backgroundColor= "#181818"
+borderColor = "#181818"

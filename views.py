@@ -20,7 +20,7 @@ from ui_components import (
     render_mcq_block,
     render_card_block,
     render_mindmap_block,
-    render_answer_with_evidence,
+    render_answer_with_evidence
 )
 def render_assistant_record_body(proj, rec, idx):
     kind = rec.get("kind", "msg")

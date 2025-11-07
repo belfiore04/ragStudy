@@ -32,6 +32,7 @@ for p in sorted(INDEX_ROOT.glob("*/project.json")):
     proj.load_meta()
     projects.append(proj)
 
+
 # ============= 侧边栏导航 =============
 st.sidebar.markdown("### 页面")
 if st.sidebar.button("新建项目"):
