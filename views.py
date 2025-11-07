@@ -217,7 +217,7 @@ def render_chat_view(INDEX_ROOT: Path):
             with st.chat_message("assistant"):
                 if use_plan:
                     # 1) 先让 LLM 生成学习 plan
-                    plan = llm_make_plan(llm, user_msg, devlog)
+                    plan = llm_make_plan(llm, user_msg, devlog,chats)
                     # 2) 再按 plan 执行多个工具
                     step_records = execute_plan(
                         plan=plan,

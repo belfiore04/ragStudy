@@ -5,7 +5,7 @@ from typing import Dict, Any, List, Tuple, Optional
 import streamlit as st
 from langchain.schema import Document
 from rag_core import retrieve
-from llm import rag_answer, gen_mcq, gen_card_or_map
+from llm import _rewrite_query_if_needed, rag_answer, gen_mcq, gen_card_or_map
 from utils import now_ts
 import json
 from ui_components import (
@@ -23,8 +23,6 @@ def run_tool(
     user_msg: str,
     topic: str,
     devlog: Dict[str, Any],
-    history: Optional[List[Dict[str, Any]]] = None,
-    role: Optional[str] = None,
     strictness: str = "strict",
     extra_context: str = "",
     instruction: str = "",  
@@ -36,7 +34,7 @@ def run_tool(
     - 返回需要写入 chat.jsonl 的记录列表
     """
     records: List[Dict[str, Any]] = []
-
+    q = topic or user_msg
     if mode == "quiz":
         hits_r = retrieve(vs, topic, k=8)
         ctx = "\n\n".join(d.page_content[:600] for d in hits_r)
@@ -46,10 +44,10 @@ def run_tool(
                     llm,
                     ctx,
                     devlog,
-                    role=role,
                     strictness=strictness,
                     extra_context=extra_context,
-                    instruction = instruction
+                    instruction = instruction,
+                    topic = topic
                 )
         except Exception as e:
             devlog["error_mcq"] = str(e)
@@ -82,10 +80,10 @@ def run_tool(
                     ctx,
                     mode_cardmap if mode_cardmap in ("card", "mindmap") else "card",
                     devlog,
-                    role=role,
                     strictness=strictness,
                     extra_context=extra_context,
-                    instruction = instruction
+                    instruction = instruction,
+                    topic = topic
                 )
             if mode_cardmap == "card":
                 render_card_block(out)
@@ -111,8 +109,6 @@ def run_tool(
                 llm, vs, q,
                 k=4,
                 devlog=devlog,
-                history=history,
-                role=role,
                 strictness=strictness,
                 extra_context=extra_context,
                 instruction = instruction
@@ -136,7 +132,12 @@ def run_tool(
     return records
 
 # tools.py 中新增
-def llm_route_tool(llm, user_msg: str) -> Tuple[str, str]:
+def llm_route_tool(
+        llm,
+        user_msg: str,
+        devlog: Optional[Dict[str, Any]] = None, 
+        history: Optional[List[Dict[str, Any]]] = None,
+        ) -> Tuple[str, str]:
     """
     统一的工具路由入口：
     1) 先用规则处理显式指令（/quiz, /card, /map、中文关键词），直接返回；
@@ -145,27 +146,34 @@ def llm_route_tool(llm, user_msg: str) -> Tuple[str, str]:
     返回: (mode, topic)
     """
     text = user_msg.strip()
-    lower = text.lower()
+    #重写query
+    if devlog is None:
+        devlog = {}
 
-    # === 1. 规则优先：兼容旧的显式指令 & 中文关键词 ===
-    # 出题
-    if ("/quiz" in lower) or ("生成题目" in text) or ("测验" in text) or ("出几道题" in text):
-        # 提取 /quiz 后面的部分作为 topic，兼容以前写法
-        after = re.sub(r"^.*?/quiz", "", lower).strip()
-        topic = after or text
-        return "quiz", topic
+    # 1) 改写一次（之后全局都用 rewritten_q）
+    text = _rewrite_query_if_needed(llm, user_msg, history, devlog)
+    devlog["route_original_q"] = user_msg
+    devlog["route_rewritten_q"] = text
 
-    # 知识卡片
-    if ("/card" in lower) or ("知识卡片" in text) or ("整理成知识点" in text) or ("做成卡片" in text):
-        after = re.sub(r"^.*?/card", "", lower).strip()
-        topic = after or text
-        return "card", topic
+    # # === 1. 规则优先：兼容旧的显式指令 & 中文关键词 ===
+    # # 出题
+    # if ("/quiz" in lower) or ("生成题目" in text) or ("测验" in text) or ("出几道题" in text):
+    #     # 提取 /quiz 后面的部分作为 topic，兼容以前写法
+    #     after = re.sub(r"^.*?/quiz", "", lower).strip()
+    #     topic = after or text
+    #     return "quiz", topic
 
-    # 思维导图
-    if ("/map" in lower) or ("思维导图" in text) or ("梳理结构" in text) or ("画个导图" in text):
-        after = re.sub(r"^.*?/map", "", lower).strip()
-        topic = after or text
-        return "map", topic
+    # # 知识卡片
+    # if ("/card" in lower) or ("知识卡片" in text) or ("整理成知识点" in text) or ("做成卡片" in text):
+    #     after = re.sub(r"^.*?/card", "", lower).strip()
+    #     topic = after or text
+    #     return "card", topic
+
+    # # 思维导图
+    # if ("/map" in lower) or ("思维导图" in text) or ("梳理结构" in text) or ("画个导图" in text):
+    #     after = re.sub(r"^.*?/map", "", lower).strip()
+    #     topic = after or text
+    #     return "map", topic
 
     # === 2. 没有显式工具指令，交给 LLM 决策 ===
     system_prompt = (
@@ -199,7 +207,9 @@ def llm_route_tool(llm, user_msg: str) -> Tuple[str, str]:
     except Exception:
         # 解析失败：兜底为普通回答
         return "answer", text
-def llm_make_plan(llm, user_msg: str, devlog: Dict[str, Any]) -> Dict[str, Any]:
+
+
+def llm_make_plan(llm, user_msg: str, devlog: Dict[str, Any],  history: Optional[List[Dict[str, Any]]] = None,) -> Dict[str, Any]:
     """
     让 LLM 规划一个多步学习 plan，并保留教案字段。
     - 保留并规范化: id/tool/topic/instruction/role/strictness/n_questions/read_keys/write_key/output_format
@@ -213,21 +223,100 @@ def llm_make_plan(llm, user_msg: str, devlog: Dict[str, Any]) -> Dict[str, Any]:
         read_keys: 仅允许引用已出现的 write_key（前向依赖会被丢弃）
     """
     text = user_msg.strip()
-
+    example = ('''
+        ```json
+{
+  "steps": [
+    {
+      "id": 1,
+      "tool": "quiz",
+      "topic": "自底向上概念的直观解释和初步引入",
+      "instruction": "你在教学计划的开头位置，保持题目简单，带有引入性质",
+      "strictness": "soft",
+      "read_keys": [],
+      "write_key": "pre_knowledge"
+    },
+    {
+      "id": 2,
+      "tool": "answer",
+      "topic": "自底向上的基本定义和核心思想",
+      "instruction": "让你的语言保持生动",
+      "strictness": "strict",
+      "read_keys": ["pre_knowledge"],
+      "write_key": "basic_concept"
+    },
+    {
+      "id": 3,
+      "tool": "card",
+      "topic": "自底向上的步骤",
+      "instruction": "详细解释抽象的步骤，最好举出例子",
+      "strictness": "strict",
+      "read_keys": ["basic_concept"],
+      "write_key": "key_features"
+    },
+    {
+      "id": 4,
+      "tool": "quiz",
+      "topic": "自底向上定义理解检测",
+      "instruction": "请不要脱离上面给出的定义范围出题",
+      "strictness": "strict",
+      "read_keys": ["basic_concept", "key_features"],
+      "write_key": "understanding_level"
+    },
+    {
+      "id": 5,
+      "tool": "map",
+      "topic": "自底向上知识体系",
+      "instruction": "总体总结一遍上面的知识，只注意宏观完整即可",
+      "strictness": "soft",
+      "read_keys": ["basic_concept", "key_features", "understanding_level"],
+      "write_key": "knowledge_map"
+    },
+    {
+      "id": 6,
+      "tool": "answer",
+      "topic": "自底向上的应用",
+      "instruction": "你需要保持内容丰富充实，你在回答的结尾部分，所以需要让你的回答带有总结收束性质",
+      "strictness": "soft"
+      "read_keys": ["knowledge_map"],
+      "write_key": "final_summary",
+    }
+  ]
+}
+```
+''')
     system_prompt = (
-        "你是一个教学“教案员”。你不直接讲解知识，也不生成最终内容。"
-        "你的任务是按“老师上课”的节奏，规划 1–6 个步骤的教学流程，供下游工具执行。\n"
-        "可用工具：answer(讲解/总结, 输出text)、quiz(单选题, 输出mcq_json)、"
-        "card(知识卡片, 输出markdown)、map(思维导图, 输出markdown)。\n"
-        "每步需要字段：id/tool/topic/instruction/role/strictness/n_questions/read_keys/write_key/output_format。\n"
-        "role ∈ {intro_quiz,explain,check_understanding,summary}；strictness ∈ {strict,soft,free}。\n"
-        "read_keys 引用之前步骤的 write_key；若无依赖则为空数组。\n"
-        "严格输出 JSON：{\"steps\":[{...}]}\n"
-        "不要输出任何多余文字。"
+        '''你是一个教学“教案员”。你不直接讲解知识，也不生成最终内容。\n
+        你的任务是按“老师上课”的节奏，规划 1–6 个步骤的教学流程，供下游工具执行。\n
+        你的工具分别是：answer(讲解/总结, 输出text)、quiz(单选题, 输出mcq_json)、
+        card(知识卡片, 输出markdown)、map(思维导图, 输出markdown)。\n
+        你要注意对整体教学节奏和流程的把控，根据用户输入自行给出一个“上下衔接连贯”的教学安排。\n
+        以下是几种常见的教学节奏供你参考（但不必拘泥）：
+        文字引入-出题-文字讲解-总结/出题-文字讲解-出题-总结/先总结-分别出题-最后讲解。\n
+        你在回答时“必须”遵守这些规则：\n
+        1.你的回答应该是JSON形式：{\"steps\":[{...}]}；\n
+        2.每一个step需要包含这些字段：id（1、2……）/tool/topic/instruction/strictness/read_keys/write_key；\n
+        3.tool字段描述这一步需要使用的工具，范围：answer、quiz、card、map；\n
+        4.topic字段应该填入在你的教学节奏中这一步的教学内容，
+        请使你的教学内容精准、带有逻辑且互不重复，下游工具将会严格按照你的教学内容生成；\n
+        5.insruction字段应该填入你觉得为了让下游工具更好地生成内容，它需要知道的额外信息。
+        这些可能包括：在整个计划中的位置、回答的详细程度、难易度等；\n
+        6.strictness字段描述这一步回答的严谨程度，范围：strict、soft。如果涉及到开放知识的生成
+        （比如例子、引入、补充知识等），可以使用soft，否则使用strict；\n
+        7.为了实现后一步在生成时能看到之前步骤的结果，你有一块黑板。\n
+        你可以通过read_keys和write_key字段来控制这一步要不要向黑板写或者从黑板读。\n
+        比如你在step2的write_key写了"aaa"，在step3的read_keys写了"aaa"，
+        那step3就会在生成时在黑板上找到名为"aaa"的项，内容就是step2的生成内容。\n
+        你“禁止”输出任何多余文字。\n
+        以下是你回答的一个示例：\n
+        '''
+        + example
     )
-    user_prompt = f"用户输入：{text}\n请给出一个合适的教学 plan。"
-
-    out = llm.invoke(system_prompt + "\n\n" + user_prompt)
+    rewritten_q = _rewrite_query_if_needed(llm, text, history, devlog)
+    user_prompt = f"用户输入：{rewritten_q}\n请开始给出你的plan。"
+    prompt = system_prompt + "\n\n" + user_prompt
+    devlog["plan_prompt"] = prompt
+    out = llm.invoke(prompt)
     raw = getattr(out, "content", str(out)).strip()
     devlog["plan_raw"] = raw
 
@@ -241,17 +330,13 @@ def llm_make_plan(llm, user_msg: str, devlog: Dict[str, Any]) -> Dict[str, Any]:
     steps = data.get("steps")
     if not isinstance(steps, list) or not steps:
         # 兜底：退化为单步 answer
-        plan = {"steps": [{"id": "s1", "tool": "answer", "topic": text, "role": "explain",
-                           "strictness": "strict", "read_keys": [], "write_key": None,
-                           "output_format": "text"}]}
+        plan = {"steps": [{"id": "1", "tool": "answer", "topic": text, "instruction": "请你详细解释",
+                           "strictness": "strict", "read_keys": [], "write_key": []}]}
         devlog["plan_json"] = json.dumps(plan, ensure_ascii=False, indent=2)
         return plan
 
     allowed_tools = {"answer", "quiz", "card", "map"}
-    allowed_roles = {"intro_quiz", "explain", "check_understanding", "summary"}
-    allowed_strict = {"strict", "soft", "free"}
-    allowed_fmt = {"text", "mcq_json", "markdown"}
-    default_fmt = {"answer": "text", "quiz": "mcq_json", "card": "markdown", "map": "markdown"}
+    allowed_strict = {"strict", "soft"}
 
     norm_steps: List[Dict[str, Any]] = []
     seen_write_keys: set[str] = set()
@@ -287,29 +372,11 @@ def llm_make_plan(llm, user_msg: str, devlog: Dict[str, Any]) -> Dict[str, Any]:
                 "map": "生成思维导图，最多四级节点。"
             }[tool]
 
-        # role
-        role = str(sn.get("role") or ("explain" if tool == "answer"
-                                      else "intro_quiz" if tool == "quiz"
-                                      else "summary")).lower()
-        if role not in allowed_roles:
-            role = "explain" if tool == "answer" else ("intro_quiz" if tool == "quiz" else "summary")
-        sn["role"] = role
-
         # strictness
         strict = str(sn.get("strictness", "strict")).lower()
         if strict not in allowed_strict:
             strict = "strict"
         sn["strictness"] = strict
-
-        # n_questions
-        if tool == "quiz":
-            try:
-                nq = int(sn.get("n_questions", 1))
-            except Exception:
-                nq = 1
-            sn["n_questions"] = max(1, min(10, nq))
-        else:
-            sn.pop("n_questions", None)
 
         # read_keys
         rk = sn.get("read_keys", [])
@@ -326,12 +393,6 @@ def llm_make_plan(llm, user_msg: str, devlog: Dict[str, Any]) -> Dict[str, Any]:
         sn["write_key"] = wk
         if wk:
             seen_write_keys.add(wk)
-
-        # output_format
-        ofmt = sn.get("output_format")
-        ofmt = str(ofmt).lower() if ofmt else None
-        ofmt = ofmt if ofmt in allowed_fmt else default_fmt[tool]
-        sn["output_format"] = ofmt
 
         norm_steps.append(sn)
 
@@ -350,10 +411,6 @@ def execute_plan(
 ) -> List[Dict[str, Any]]:
     """
     按 plan 依次执行多个工具步骤。
-    - 支持教案字段：role/strictness/instruction/read_keys/write_key/output_format/n_questions
-    - 用简易“黑板” artifacts 在步骤间传递产物；
-    - 每步执行时仅使用 topic 驱动工具，避免读取用户的流程指令；
-    - 将 role/strictness/extra_context 传入 run_tool 以控制生成风格与依赖上下文。
     返回：所有步骤产生的聊天记录列表（用于写入 chat.jsonl）
     """
     records_all: List[Dict[str, Any]] = []
@@ -419,24 +476,18 @@ def execute_plan(
     for idx, step in enumerate(steps, start=1):
         tool = step.get("tool", "answer")
         topic = (step.get("topic") or user_msg or "").strip()
-        n_questions = int(step.get("n_questions", 1) or 1)
-        role = step.get("role")
         strictness = step.get("strictness", "strict")
         instruction = step.get("instruction", "")  # 仅用于 devlog 记录
         read_keys: List[str] = step.get("read_keys", []) or []
         write_key = step.get("write_key")
-        output_format = step.get("output_format")  # 仅用于 devlog 记录
 
         # devlog 标注本步信息
         devlog[f"step_{idx}_tool"] = tool
         devlog[f"step_{idx}_topic"] = topic
-        devlog[f"step_{idx}_n_questions"] = n_questions
-        devlog[f"step_{idx}_role"] = role or ""
         devlog[f"step_{idx}_strictness"] = strictness
         devlog[f"step_{idx}_instruction"] = instruction
         devlog[f"step_{idx}_read_keys"] = ",".join(read_keys)
         devlog[f"step_{idx}_write_key"] = write_key or ""
-        devlog[f"step_{idx}_output_format"] = output_format or ""
 
         # 拼装跨步依赖上下文
         extra_context = _build_extra_context(read_keys)
@@ -444,38 +495,19 @@ def execute_plan(
 
         # 执行
         step_records: List[Dict[str, Any]] = []
-        if tool == "quiz" and n_questions > 1:
-            # 多题：循环调用 quiz
-            for j in range(n_questions):
-                sub = run_tool(
-                    mode="quiz",
-                    proj=proj,
-                    vs=vs,
-                    llm=llm,
-                    user_msg=f"(auto) quiz {j+1}/{n_questions} for {topic}",
-                    topic=topic,
-                    devlog=devlog,
-                    role=role,
-                    strictness=strictness,
-                    extra_context=extra_context,
-                    instruction = instruction
-                )
-                step_records.extend(sub)
-        else:
-            sub = run_tool(
-                mode=tool,
-                proj=proj,
-                vs=vs,
-                llm=llm,
-                user_msg=f"(auto) {tool} for {topic}",
-                topic=topic,
-                devlog=devlog,
-                role=role,
-                strictness=strictness,
-                extra_context=extra_context,
-                instruction = instruction
-            )
-            step_records.extend(sub)
+        sub = run_tool(
+            mode=tool,
+            proj=proj,
+            vs=vs,
+            llm=llm,
+            user_msg=f"(auto) {tool} for {topic}",
+            topic=topic,
+            devlog=devlog,
+            strictness=strictness,
+            extra_context=extra_context,
+            instruction = instruction
+        )
+        step_records.extend(sub)
 
         # 累计到总记录
         records_all.extend(step_records)

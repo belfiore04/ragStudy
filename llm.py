@@ -22,81 +22,68 @@ def get_llm():
         timeout=60,
         max_retries=2,
     )
+
+
 def rag_answer(
         llm: ChatOpenAI,
         vs,
         q: str,
         k: int,
         devlog: Dict[str, Any],
-        history: List[Dict[str, Any]] | None = None,
         role: str | None = None,
         strictness: str = "strict",
         extra_context: str = "",
         instruction: str = ""
 ) -> Tuple[str, List[Document]]:
+    # q是话题，已不是问题
     # 1) 按需改写检索 query（可能等于原 q）
-    rewritten_q = _rewrite_query_if_needed(llm, q, history, devlog)
+
 
     # 2) 检索
-    hits = retrieve(vs, rewritten_q, k)
+    hits = retrieve(vs, q, k)
     ctx = format_hits(hits)
-
-    # 3) 角色提示
-    if role == "summary":
-        role_hint = (
-            "你现在处于“总结”环节：\n"
-            "- 用简洁条目回顾核心要点；\n"
-            "- 不引入新的具体事实。\n"
-        )
-    else:  # 默认为讲解
-        role_hint = (
-            "你现在处于“讲解”环节：\n"
-            "- 先给出直观解释；\n"
-            "- 再分点写出关键要点、步骤、注意点；\n"
-            "- 如合适，可给一个很小的例子帮助理解。\n"
-        )
 
     # 4) 严格度策略
     if str(strictness).lower() == "soft":
         strict_hint = (
-            "严格度=soft：以 [CONTEXT] 为主，允许少量通用教学衔接语，"
-            "但不要引入材料未出现的具体事实。\n"
+            "你可以以教案为参考，自行发挥来执行好你的指示。"
         )
     else:
         strictness = "strict"
         strict_hint = (
-            "严格度=strict：仅基于 [CONTEXT] 回答。若依据不足，直接回答“依据不足”。\n"
+            '''你需要以教案作为主要参考去输出教学内容。
+            如果依据不足，你可以适当补充一些内容，但总体上不能和教案冲突。\n'''
         )
 
     # 5) 组装可选的“前序产物”
     prev_part = ""
     extra_context = (extra_context or "").strip()
     if extra_context:
-        prev_part = f"\n[PREVIOUS_ARTIFACTS]\n{extra_context[:1200]}"
+        prev_part = f"{extra_context[:1200]}"
 
     inst_part = ""
     instruction = (instruction or "").strip()
     if instruction:
-        inst_part = f"\n[TEACHER_INSTRUCTION]\n{instruction[:400]}"
+        inst_part = f"{instruction[:400]}"
     
-    # 6) Prompt
+    #6) Prompt
     prompt = (
-        "You are a teacher-like study assistant.\n"
-        "Answer strictly based on [CONTEXT]"
-        + (" and [PREVIOUS_ARTIFACTS]" if prev_part else "")
-        + ".\n"
-        + strict_hint
-        + role_hint
-        + "回答使用中文。\n\n"
-        f"{inst_part}\n"
-        f"Original question: {q}\n"
-        f"Search query (maybe rewritten): {rewritten_q}\n\n"
-        f"[CONTEXT]\n{ctx}"
-        + prev_part
+        "你是一位辅助学习的老师，你和其他多位老师合作一起帮助一位同学学习。这次你需要给这位同学教的知识主题是："
+        f"{q}。\n"
+        "你必须严格遵守知识主题进行讲解，不可以多回答或者少回答。"
+        "在讲解时，你需要遵循你的教案员给你的指示："
+        f"{inst_part}。\n"
+        + ("你在回答时可能需要参考前面老师已经讲解的内容：\n" if prev_part else "")
+        + f"{prev_part}\n"
+        +"你有一本教案，"
+        +f"{strict_hint}\n"
+        +"教案的内容如下：\n"
+        f"{ctx}\n"
+        +"你可以开始生成了。"
     )
 
+
     devlog["prompt"] = prompt
-    devlog["role"] = role or ""
     devlog["strictness"] = strictness
     devlog["extra_context_len"] = len(extra_context)
     devlog["instruction"] = instruction
@@ -105,59 +92,57 @@ def rag_answer(
     out = llm.invoke(prompt)
     devlog["raw"] = getattr(out, "content", str(out))
     return out.content, hits
+
+
 def gen_mcq(
     llm: ChatOpenAI,
     context: str,
     devlog: Dict[str, Any],
-    role: str | None = None,
     strictness: str = "strict",
     extra_context: str = "",
-    instruction: str = ""
+    instruction: str = "",
+    topic: str = ""
 ) -> Dict[str, Any]:
     # 角色与严格度提示
-    if role == "intro_quiz":
-        role_hint = "本题为引入题，难度偏简单，侧重基础概念或直观理解。"
-    elif role == "check_understanding":
-        role_hint = "本题用于检验刚讲过的要点，可稍微综合，但不应过难。"
-    else:
-        role_hint = "生成一题合适的单选题。"
 
     if str(strictness).lower() == "soft":
         strict_hint = (
-            "严格度=soft：以 [MATERIAL] 为主，允许少量通用教学措辞；"
-            "不得捏造材料中未出现的具体事实。"
+            "你可以以教案为参考，自行发挥来执行好你的指示。"
         )
     else:
         strictness = "strict"
         strict_hint = (
-            "严格度=strict：仅基于 [MATERIAL] 出题。若信息不足，"
-            "请在 rationale 中说明“依据不足”，题干与选项仍需尽量基于已有材料。"
+            '''你需要以教案作为主要参考去输出教学内容。
+            如果依据不足，你可以适当补充一些内容，但总体上不能和教案冲突。\n'''
         )
 
     prev_part = ""
     extra_context = (extra_context or "").strip()
     if extra_context:
-        prev_part = f"\n[PREVIOUS_ARTIFACTS]\n{extra_context[:800]}"
+        prev_part = f"{extra_context[:800]}"
 
     inst_part = ""
     instruction = (instruction or "").strip()
     if instruction:
-        inst_part = f"\n[TEACHER_INSTRUCTION]\n{instruction[:300]}"
+        inst_part = f"{instruction[:300]}"
+    
     prompt = (
-        "From the [MATERIAL]"
-        + (" and [PREVIOUS_ARTIFACTS]" if prev_part else "")
-        + ", create ONE single-choice question.\n"
-        f"{role_hint}\n"
-        f"{strict_hint}\n"
-        f"{inst_part}\n"
-        'Return JSON exactly: {"question":"...","options":["A. ...","B. ...","C. ...","D. ..."],"answer":"A","rationale":"..."}\n'
-        "回答的非格式部分请用中文。\n"
-        f"[MATERIAL]\n{context[:2500]}"
-        + prev_part
+        "你是一位出单选题的老师，你和其他多位老师合作一起帮助一位同学学习。这次你需要给这位同学出题的主题是："
+        f"{topic}。\n"
+        "你必须严格遵守主题出一道单选题。"
+        "在出题时，你需要遵循你的教案员给你的指示："
+        f"{inst_part}。\n"
+        +'你的回答格式必须为JSON样式：{"question":"...","options":["A. ...","B. ...","C. ...","D. ..."],"answer":"A","rationale":"..."}\n'
+        +"你在rationale部分用一句话来解释这道题，并且带出这道题的答案字母。\n"
+        + ("你在出题时可能需要参考前面老师已经讲解的内容：\n" if prev_part else "")
+        + f"{prev_part}\n"
+        +"你有一本教案，"
+        +f"{strict_hint}\n"
+        +"教案的内容如下：\n"
+        f"{context}\n"
+        +"你可以开始出题了。"
     )
-
     devlog["prompt_mcq"] = prompt
-    devlog["mcq_role"] = role or ""
     devlog["mcq_strictness"] = strictness
     devlog["instruction"] = instruction
 
@@ -174,49 +159,54 @@ def gen_mcq(
             "rationale": text
         }
     return data
+
+
 def gen_card_or_map(
     llm: ChatOpenAI,
     context: str,
     mode: str,
     devlog: Dict[str, Any],
-    role: str | None = None,
     strictness: str = "strict",
     extra_context: str = "",
-    instruction :str= ""
+    instruction :str= "",
+    topic:str = ""
 ) -> str:
     # 产物形态
     if mode == "card":
         instr = (
-            "生成‘知识卡片’的 Markdown，包含：\n"
-            "- 核心定义\n- 关键公式/定理\n- 解题步骤\n- 易错点\n- 例题要点\n- 记忆提示\n"
+            '''你是一位给学生做知识卡片的老师，你和其他多位老师合作一起帮助一位同学学习。
+            你必须保证你的知识卡片足够简短、凝练。
+            你的输出需要使用Markdown格式。
+            这次你需要给这位同学做的知识卡片主题是：'''
         )
     else:
-        instr = "生成层级化‘思维导图’（Markdown 缩进列表，最多 4 层）。"
+        instr = (
+            '''你是一位给学生做思维导图的老师，你和其他多位老师合作一起帮助一位同学学习。
+            你的输出需要使用Markdown格式。
+            这次你需要给这位同学做的思维导图主题是：'''
+        )
 
-    # 角色与严格度提示
-    if role == "summary":
-        role_hint = "这是总结性产物：提炼要点，避免引入新事实。"
-    else:
-        role_hint = "生成用于学习复习的结构化摘要。"
 
     if str(strictness).lower() == "soft":
         strict_hint = (
-            "严格度=soft：以 [MATERIAL] 为主，允许少量通用教学措辞；"
-            "不得捏造材料中未出现的具体事实。"
+            "你可以以教案为参考，自行发挥来执行好你的指示。"
         )
     else:
         strictness = "strict"
-        strict_hint = "严格度=strict：只根据 [MATERIAL] 生成；若信息不足则保持简洁。"
+        strict_hint = (
+            '''你需要以教案作为主要参考去输出教学内容。
+            如果依据不足，你可以适当补充一些内容，但总体上不能和教案冲突。\n'''
+        )
 
     prev_part = ""
     extra_context = (extra_context or "").strip()
     if extra_context:
-        prev_part = f"\n[PREVIOUS_ARTIFACTS]\n{extra_context[:1200]}"
+        prev_part = f"{extra_context[:1200]}"
 
     inst_part = ""
     instruction = (instruction or "").strip()
     if instruction:
-        inst_part = f"\n[TEACHER_INSTRUCTION]\n{instruction[:400]}"
+        inst_part = f"{instruction[:400]}"
 
     no_codeblock_hint = (
         "重要要求：\n"
@@ -227,18 +217,23 @@ def gen_card_or_map(
         "而不是放在 ``` 包裹的代码块中。\n"
     )
     prompt = (
-        f"{instr}\n"
-        f"{role_hint}\n"
-        f"{strict_hint}\n"
-        f"{no_codeblock_hint}\n"
-        "输出用中文。\n\n"
-        f"{inst_part}\n\n"
-        f"[MATERIAL]\n{context[:4000]}"
-        + prev_part
+        instr
+        +f"{topic}。\n"            
+        "你必须严格遵守知识主题进行制作，不可以多写或者少写。"
+        "在制作时，你需要遵循你的教案员给你的指示："
+        f"{inst_part}。\n"
+        + ("你在回答时可能需要参考前面老师已经讲解的内容：\n" if prev_part else "")
+        + f"{prev_part}\n"
+        +"你有一本教案，"
+        +f"{strict_hint}\n"
+        +"教案的内容如下：\n"
+        f"{context}\n"
+        +"你可以开始生成了。"
+        +f"{no_codeblock_hint}\n"
     )
 
     devlog["prompt_cardmap"] = prompt
-    devlog["cardmap_role"] = role or ""
+
     devlog["cardmap_strictness"] = strictness
     devlog["instruction"] = instruction
     
@@ -278,6 +273,7 @@ def _build_last_turn(history: List[Dict[str, Any]] | None) -> str:
     if asst_text:
         lines.append(f"Assistant: {asst_text}")
     return "\n".join(lines)
+
 
 def _rewrite_query_if_needed(
     llm,
