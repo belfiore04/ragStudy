@@ -39,16 +39,15 @@ def run_tool(
         hits_r = retrieve(vs, topic, k=8)
         ctx = "\n\n".join(d.page_content[:600] for d in hits_r)
         try:
-            with st.spinner("生成题目中…"):
-                data = gen_mcq(
-                    llm,
-                    ctx,
-                    devlog,
-                    strictness=strictness,
-                    extra_context=extra_context,
-                    instruction = instruction,
-                    topic = topic
-                )
+            data = gen_mcq(
+                llm,
+                ctx,
+                devlog,
+                strictness=strictness,
+                extra_context=extra_context,
+                instruction = instruction,
+                topic = topic
+            )
         except Exception as e:
             devlog["error_mcq"] = str(e)
             st.error(f"生成题目失败：{e}")
@@ -74,17 +73,16 @@ def run_tool(
         ctx = "\n\n".join(d.page_content[:800] for d in hits_r)
         mode_cardmap = "card" if mode == "card" else "mindmap"
         try:
-            with st.spinner("生成内容中…"):
-                out = gen_card_or_map(
-                    llm,
-                    ctx,
-                    mode_cardmap if mode_cardmap in ("card", "mindmap") else "card",
-                    devlog,
-                    strictness=strictness,
-                    extra_context=extra_context,
-                    instruction = instruction,
-                    topic = topic
-                )
+            out = gen_card_or_map(
+                llm,
+                ctx,
+                mode_cardmap if mode_cardmap in ("card", "mindmap") else "card",
+                devlog,
+                strictness=strictness,
+                extra_context=extra_context,
+                instruction = instruction,
+                topic = topic
+            )
             if mode_cardmap == "card":
                 render_card_block(out)
             else:
@@ -103,16 +101,15 @@ def run_tool(
 
     # 默认：answer（用 topic 作为问题，避免把用户的流程指令传进回答）
     try:
-        with st.spinner("生成回答中…"):
-            q = topic or user_msg
-            ans, hits_r = rag_answer(
-                llm, vs, q,
-                k=4,
-                devlog=devlog,
-                strictness=strictness,
-                extra_context=extra_context,
-                instruction = instruction
-            )
+        q = topic or user_msg
+        ans, hits_r = rag_answer(
+            llm, vs, q,
+            k=4,
+            devlog=devlog,
+            strictness=strictness,
+            extra_context=extra_context,
+            instruction = instruction
+        )
         docs = [Document(page_content=h.page_content, metadata=h.metadata) for h in hits_r]
         render_answer_with_evidence(proj, ans, docs)
         records.append({
@@ -151,7 +148,8 @@ def llm_route_tool(
         devlog = {}
 
     # 1) 改写一次（之后全局都用 rewritten_q）
-    text = _rewrite_query_if_needed(llm, user_msg, history, devlog)
+    with st.spinner("正在分析并重建问题"):
+        text = _rewrite_query_if_needed(llm, user_msg, history, devlog)
     devlog["route_original_q"] = user_msg
     devlog["route_rewritten_q"] = text
 
@@ -286,7 +284,7 @@ def llm_make_plan(llm, user_msg: str, devlog: Dict[str, Any],  history: Optional
 ```
 ''')
     system_prompt = (
-        '''你是一个教学“教案员”。你不直接讲解知识，也不生成最终内容。\n
+    '''你是一个教学“教案员”。你不直接讲解知识，也不生成最终内容。\n
         你的任务是按“老师上课”的节奏，规划 1–6 个步骤的教学流程，供下游工具执行。\n
         你的工具分别是：answer(讲解/总结, 输出text)、quiz(单选题, 输出mcq_json)、
         card(知识卡片, 输出markdown)、map(思维导图, 输出markdown)。\n
@@ -296,7 +294,13 @@ def llm_make_plan(llm, user_msg: str, devlog: Dict[str, Any],  history: Optional
         你在回答时“必须”遵守这些规则：\n
         1.你的回答应该是JSON形式：{\"steps\":[{...}]}；\n
         2.每一个step需要包含这些字段：id（1、2……）/tool/topic/instruction/strictness/read_keys/write_key；\n
-        3.tool字段描述这一步需要使用的工具，范围：answer、quiz、card、map；\n
+        3.tool字段描述这一步需要使用的工具，范围：answer、quiz、card、map。
+        其中，answer和quiz应该是你教学计划的主要内容。
+        map只在你认为有必要梳理所有知识的宏观结构时或用户明确指名时使用，且应该放在结尾或接近结尾。
+        card只在你认为有必要提取出讲的内容里较难、复杂、不易理解的知识时或用户明确指名时使用，且应该放在结尾。
+        如果你认为知识非常简单、基础或者没有什么好提取的，你可以不规划 card。
+        card和map都起到总结梳理作用，因此“禁止”在其中出现前面没有讲过的内容，且它们之间互相不应重复。
+        请你在规划topic和read_keys时想好。\n
         4.topic字段应该填入在你的教学节奏中这一步的教学内容，
         请使你的教学内容精准、带有逻辑且互不重复，下游工具将会严格按照你的教学内容生成；\n
         5.insruction字段应该填入你觉得为了让下游工具更好地生成内容，它需要知道的额外信息。
@@ -471,7 +475,12 @@ def execute_plan(
                 if t:
                     buf.append(str(t))
         return "\n".join(buf).strip()
-
+    label_map = {
+        "answer": "讲解回答",
+        "quiz": "练习题",
+        "card": "知识卡片",
+        "map": "思维导图",
+    }
     # 依次执行每一步
     for idx, step in enumerate(steps, start=1):
         tool = step.get("tool", "answer")
@@ -492,21 +501,23 @@ def execute_plan(
         # 拼装跨步依赖上下文
         extra_context = _build_extra_context(read_keys)
         devlog[f"step_{idx}_extra_context_len"] = len(extra_context)
-
+        label = label_map.get(tool, "内容")
+        base_msg = f"第 {idx} 步  正在生成{label}：{topic}"
         # 执行
         step_records: List[Dict[str, Any]] = []
-        sub = run_tool(
-            mode=tool,
-            proj=proj,
-            vs=vs,
-            llm=llm,
-            user_msg=f"(auto) {tool} for {topic}",
-            topic=topic,
-            devlog=devlog,
-            strictness=strictness,
-            extra_context=extra_context,
-            instruction = instruction
-        )
+        with st.spinner(base_msg):
+            sub = run_tool(
+                mode=tool,
+                proj=proj,
+                vs=vs,
+                llm=llm,
+                user_msg=f"(auto) {tool} for {topic}",
+                topic=topic,
+                devlog=devlog,
+                strictness=strictness,
+                extra_context=extra_context,
+                instruction = instruction
+            )
         step_records.extend(sub)
 
         # 累计到总记录

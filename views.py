@@ -217,7 +217,8 @@ def render_chat_view(INDEX_ROOT: Path):
             with st.chat_message("assistant"):
                 if use_plan:
                     # 1) 先让 LLM 生成学习 plan
-                    plan = llm_make_plan(llm, user_msg, devlog,chats)
+                    with st.spinner("正在生成学习计划"):
+                        plan = llm_make_plan(llm, user_msg, devlog,chats)
                     # 2) 再按 plan 执行多个工具
                     step_records = execute_plan(
                         plan=plan,
@@ -237,17 +238,24 @@ def render_chat_view(INDEX_ROOT: Path):
                     records = [multi_rec]
                 else:
                     mode, topic = llm_route_tool(llm, user_msg)
-
-                    records = run_tool(
-                        mode=mode,
-                        proj=proj,
-                        vs=vs,
-                        llm=llm,
-                        user_msg=user_msg,
-                        topic=topic,
-                        devlog=devlog,
-                        history=chats
-                    )
+                    mode2msg = {
+                        "answer": "正在生成讲解回答…",
+                        "quiz": "正在出练习题…",
+                        "card": "正在整理知识卡片…",
+                        "map": "正在绘制思维导图…",
+                    }
+                    spinner_msg = mode2msg.get(mode, "正在生成内容…")
+                    with st.spinner(spinner_msg):
+                        records = run_tool(
+                            mode=mode,
+                            proj=proj,
+                            vs=vs,
+                            llm=llm,
+                            user_msg=user_msg,
+                            topic=topic,
+                            devlog=devlog,
+                            history=chats
+                        )
 
                 # 写入 assistant 侧聊天记录
                 for rec in records:
