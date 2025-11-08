@@ -1,3 +1,4 @@
+from io import StringIO
 import re
 import json
 import streamlit as st
@@ -6,7 +7,7 @@ from typing import Tuple, List, Dict, Any
 from langchain.schema import Document
 from config import MODEL_NAME, MODEL_BASE_URL, API_ENV_KEY
 from rag_core import retrieve, format_hits
-
+from ds_client import deepseek_client
 
 @st.cache_resource(show_spinner=False)
 def get_llm():
@@ -97,9 +98,32 @@ def rag_answer(
     devlog["instruction"] = instruction
 
 
-    out = llm.invoke(prompt)
-    devlog["raw"] = getattr(out, "content", str(out))
-    return out.content, hits
+    # out = llm.invoke(prompt)
+    # devlog["raw"] = getattr(out, "content", str(out))
+    placeholder = st.empty()
+    buffer = StringIO()
+
+    # 3) 调用 deepseek 流式
+    stream = deepseek_client.chat.completions.create(
+        model="deepseek-chat",
+        stream=True,
+        messages=[
+            {"role": "user", "content": prompt},
+        ],
+    )
+
+    for chunk in stream:
+        delta = chunk.choices[0].delta
+        token = delta.content or ""
+        if not token:
+            continue
+        buffer.write(token)
+        # 实时刷到页面
+        placeholder.markdown(buffer.getvalue())
+
+    final_text = buffer.getvalue()
+    devlog["raw"] = final_text
+    return final_text, hits
 
 
 def gen_mcq(

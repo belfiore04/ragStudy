@@ -111,7 +111,7 @@ def run_tool(
             instruction = instruction
         )
         docs = [Document(page_content=h.page_content, metadata=h.metadata) for h in hits_r]
-        render_answer_with_evidence(proj, ans, docs)
+        render_evidence_cards(proj, docs)
         records.append({
             "t": now_ts(),
             "role": "assistant",
