@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import List, Dict, Any
 from langchain.schema import Document
 from io_readers import convert_to_pdf_with_libreoffice, pdf_page_to_image
-from streamlit_markmap import markmap
 import streamlit.components.v1 as components
 
 def _render_block_container(kind: str, title: str | None = None):
